@@ -10,6 +10,7 @@ typedef struct _button {
     uint8_t gpio_num;
     button_config_t config;
     button_callback_fn callback;
+    void* context;
 
     uint8_t press_count;
     ETSTimer press_timer;
@@ -65,14 +66,14 @@ void button_intr_callback(uint8_t gpio) {
                 button->press_count = 0;
                 sdk_os_timer_disarm(&button->press_timer);
 
-                button->callback(button->gpio_num, button_event_double_press);
+                button->callback(button_event_double_press, button->context);
             } else {
                 if (button->config.double_press_time) {
                     sdk_os_timer_arm(&button->press_timer,
                                      button->config.double_press_time, 1);
                 } else {
                     button->press_count = 0;
-                    button->callback(button->gpio_num, button_event_single_press);
+                    button->callback(button_event_single_press, button->context);
                 }
             }
         }
@@ -88,13 +89,14 @@ void button_timer_callback(void *arg) {
     button->press_count = 0;
     sdk_os_timer_disarm(&button->press_timer);
 
-    button->callback(button->gpio_num, button_event_single_press);
+    button->callback(button_event_single_press, button->context);
 }
 
 
 int button_create(const uint8_t gpio_num,
                   button_config_t config,
-                  button_callback_fn callback)
+                  button_callback_fn callback,
+                  void* context)
 {
     button_t *button = button_find_by_gpio(gpio_num);
     if (button)
@@ -105,6 +107,7 @@ int button_create(const uint8_t gpio_num,
     button->gpio_num = gpio_num;
     button->config = config;
     button->callback = callback;
+    button->context = context;
 
     button->next = buttons;
     buttons = button;

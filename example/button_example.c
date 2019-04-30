@@ -18,16 +18,16 @@ void idle_task(void* arg) {
     vTaskDelete(NULL);
 }
 
-void button_callback(uint8_t gpio, button_event_t event) {
+void button_callback(button_event_t event, void* context) {
     switch (event) {
         case button_event_single_press:
-            printf("button %d single press\n", gpio);
+            printf("single press\n");
             break;
         case button_event_double_press:
-            printf("button %d double press\n", gpio);
+            printf("double press\n");
             break;
         case button_event_long_press:
-            printf("button %d long press\n", gpio);
+            printf("long press\n");
             break;
     }
 }
@@ -40,8 +40,8 @@ void user_init(void) {
         .active_level=button_active_low,
     );
 
-    int r;
-    if (r = button_create(BUTTON_GPIO, button_config, button_callback)) {
+    int r = button_create(BUTTON_GPIO, button_config, button_callback, NULL);
+    if (r) {
         printf("Failed to initalize button (code %d)\n", r);
     }
 

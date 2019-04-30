@@ -15,7 +15,7 @@ There are two ways to wire button:
 ```c
 #define BUTTON_PIN 5
 
-void button_callback(uint8_t gpio, button_event_t event) {
+void button_callback(button_event_t event, void* context) {
     switch (event) {
         case button_event_single_press:
             printf("single press\n");
@@ -30,7 +30,7 @@ button_config_t config = BUTTON_CONFIG(
     .active_level = button_active_high,
 );
 
-int r = button_create(BUTTON_PIN, config, button_callback);
+int r = button_create(BUTTON_PIN, config, button_callback, NULL);
 if (r) {
     printf("Failed to initialize a button\n");
 }
