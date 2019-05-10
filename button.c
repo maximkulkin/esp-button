@@ -59,7 +59,7 @@ void button_intr_callback(uint8_t gpio) {
         {
             button->press_count = 0;
 
-            button->callback(button->gpio_num, button_event_long_press);
+            button->callback(button_event_long_press, button->context);
         } else {
             button->press_count++;
             if (button->press_count > 1) {
