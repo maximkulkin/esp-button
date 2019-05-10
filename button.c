@@ -113,6 +113,7 @@ int button_create(const uint8_t gpio_num,
     buttons = button;
 
     bool pullup = (config.active_level == button_active_low);
+    gpio_enable(button->gpio_num, GPIO_INPUT);
     gpio_set_pullup(button->gpio_num, pullup, pullup);
     gpio_set_interrupt(button->gpio_num, GPIO_INTTYPE_EDGE_ANY, button_intr_callback);
 
