@@ -42,7 +42,7 @@ void user_init(void) {
 
     int r = button_create(BUTTON_GPIO, button_config, button_callback, NULL);
     if (r) {
-        printf("Failed to initalize button (code %d)\n", r);
+        printf("Failed to initialize button (code %d)\n", r);
     }
 
     printf("Button example\n");
