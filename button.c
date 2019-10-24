@@ -1,8 +1,12 @@
 #include <stdio.h>
 #include <string.h>
-#include <etstimer.h>
-#include <esp/interrupts.h>
 #include <esplibs/libmain.h>
+
+#include <FreeRTOS.h>
+#include <semphr.h>
+#include <timers.h>
+
+#include "toggle.h"
 #include "button.h"
 
 
@@ -13,93 +17,119 @@ typedef struct _button {
     void* context;
 
     uint8_t press_count;
-    ETSTimer press_timer;
-    uint32_t last_press_time;
-    uint32_t last_event_time;
+    TimerHandle_t long_press_timer;
+    TimerHandle_t repeat_press_timeout_timer;
 
     struct _button *next;
 } button_t;
 
+static SemaphoreHandle_t buttons_lock = NULL;
+static button_t *buttons = NULL;
 
-button_t *buttons = NULL;
+static void button_fire_event(button_t *button) {
+    button_event_t event = button_event_single_press;
 
+    switch (button->press_count) {
+        case 1: event = button_event_single_press; break;
+        case 2: event = button_event_double_press; break;
+        case 3: event = button_event_tripple_press; break;
+    }
 
-static button_t *button_find_by_gpio(const uint8_t gpio_num) {
-    button_t *button = buttons;
-    while (button && button->gpio_num != gpio_num)
-        button = button->next;
-
-    return button;
+    button->callback(event, button->context);
+    button->press_count = 0;
 }
 
-
-void button_intr_callback(uint8_t gpio) {
-    uint32_t interrupts = _xt_disable_interrupts();
-
-    button_t *button = button_find_by_gpio(gpio);
-    if (!button) {
-        _xt_restore_interrupts(interrupts);
+static void button_toggle_callback(bool high, void *context) {
+    if (!context)
         return;
-    }
 
-    uint32_t now = xTaskGetTickCountFromISR();
-    if ((now - button->last_event_time)*portTICK_PERIOD_MS < button->config.debounce_time) {
-        // debounce time, ignore events
-        _xt_restore_interrupts(interrupts);
-        return;
-    }
-
-    button->last_event_time = now;
-    if (gpio_read(button->gpio_num) == (int)button->config.active_level) {
-        button->last_press_time = now;
+    button_t *button = (button_t*) context;
+    if (high == (button->config.active_level == button_active_high)) {
+        // pressed
+        button->press_count++;
+        if (button->config.long_press_time && button->press_count == 1) {
+            xTimerStart(button->long_press_timer, 1);
+        }
     } else {
-        uint32_t press_duration = (now - button->last_press_time)*portTICK_PERIOD_MS;
-        if (button->config.long_press_time &&
-            press_duration > button->config.long_press_time)
-        {
-            button->press_count = 0;
+        // released
+        if (!button->press_count)
+            return;
 
-            button->callback(button_event_long_press, button->context);
-        } else {
-            button->press_count++;
-            if (button->press_count > 1) {
-                button->press_count = 0;
-                sdk_os_timer_disarm(&button->press_timer);
+        if (button->long_press_timer
+                && xTimerIsTimerActive(button->long_press_timer)) {
+            xTimerStop(button->long_press_timer, 1);
+        }
 
-                button->callback(button_event_double_press, button->context);
-            } else {
-                if (button->config.double_press_time) {
-                    sdk_os_timer_arm(&button->press_timer,
-                                     button->config.double_press_time, 1);
-                } else {
-                    button->press_count = 0;
-                    button->callback(button_event_single_press, button->context);
-                }
+        if (button->press_count >= button->config.max_repeat_presses
+                || !button->config.repeat_press_timeout) {
+            if (button->repeat_press_timeout_timer
+                    && xTimerIsTimerActive(button->repeat_press_timeout_timer)) {
+                xTimerStop(button->repeat_press_timeout_timer, 1);
             }
+
+            button_fire_event(button);
+        } else {
+            xTimerStart(button->repeat_press_timeout_timer, 1);
         }
     }
-
-    _xt_restore_interrupts(interrupts);
 }
 
+static void button_long_press_timer_callback(TimerHandle_t timer) {
+    button_t *button = (button_t*) pvTimerGetTimerID(timer);
 
-void button_timer_callback(void *arg) {
-    button_t *button = arg;
-
+    button->callback(button_event_long_press, button->context);
     button->press_count = 0;
-    sdk_os_timer_disarm(&button->press_timer);
-
-    button->callback(button_event_single_press, button->context);
 }
 
+static void button_repeat_press_timeout_timer_callback(TimerHandle_t timer) {
+    button_t *button = (button_t*) pvTimerGetTimerID(timer);
+
+    button_fire_event(button);
+}
+
+static void button_free(button_t *button) {
+    if (button->long_press_timer) {
+        xTimerStop(button->long_press_timer, 1);
+        xTimerDelete(button->long_press_timer, 1);
+    }
+
+    if (button->repeat_press_timeout_timer) {
+        xTimerStop(button->repeat_press_timeout_timer, 1);
+        xTimerDelete(button->repeat_press_timeout_timer, 1);
+    }
+
+    free(button);
+}
+
+static int buttons_init() {
+    taskENTER_CRITICAL();
+    if (!buttons_lock) {
+        buttons_lock = xSemaphoreCreateBinary();
+        xSemaphoreGive(buttons_lock);
+    }
+    taskEXIT_CRITICAL();
+
+    return 0;
+}
 
 int button_create(const uint8_t gpio_num,
                   button_config_t config,
                   button_callback_fn callback,
                   void* context)
 {
-    button_t *button = button_find_by_gpio(gpio_num);
-    if (button)
+    if (!buttons_lock) {
+        buttons_init();
+    }
+
+    xSemaphoreTake(buttons_lock, portMAX_DELAY);
+    button_t *button = buttons;
+    while (button && button->gpio_num != gpio_num)
+        button = button->next;
+
+    bool exists = button != NULL;
+    xSemaphoreGive(buttons_lock);
+
+    if (exists)
         return -1;
 
     button = malloc(sizeof(button_t));
@@ -108,25 +138,58 @@ int button_create(const uint8_t gpio_num,
     button->config = config;
     button->callback = callback;
     button->context = context;
-
-    button->next = buttons;
-    buttons = button;
+    if (config.long_press_time) {
+        button->long_press_timer = xTimerCreate(
+            "Button Long Press Timer", pdMS_TO_TICKS(config.long_press_time),
+            pdFALSE, button, button_long_press_timer_callback
+        );
+        if (!button->long_press_timer) {
+            button_free(button);
+            return -2;
+        }
+    }
+    if (config.max_repeat_presses > 1) {
+        button->repeat_press_timeout_timer = xTimerCreate(
+            "Button Repeat Press Timeout Timer", pdMS_TO_TICKS(config.repeat_press_timeout),
+            pdFALSE, button, button_repeat_press_timeout_timer_callback
+        );
+        if (!button->repeat_press_timeout_timer) {
+            button_free(button);
+            return -3;
+        }
+    }
 
     bool pullup = (config.active_level == button_active_low);
     gpio_enable(button->gpio_num, GPIO_INPUT);
     gpio_set_pullup(button->gpio_num, pullup, pullup);
-    gpio_set_interrupt(button->gpio_num, GPIO_INTTYPE_EDGE_ANY, button_intr_callback);
 
-    sdk_os_timer_disarm(&button->press_timer);
-    sdk_os_timer_setfn(&button->press_timer, button_timer_callback, button);
+    int r = toggle_create(gpio_num, button_toggle_callback, button);
+    if (r) {
+        button_free(button);
+        return -4;
+    }
+
+    xSemaphoreTake(buttons_lock, portMAX_DELAY);
+
+    button->next = buttons;
+    buttons = button;
+
+    xSemaphoreGive(buttons_lock);
 
     return 0;
 }
 
-
 void button_delete(const uint8_t gpio_num) {
-    if (!buttons)
+    if (!buttons_lock) {
+        buttons_init();
+    }
+
+    xSemaphoreTake(buttons_lock, portMAX_DELAY);
+
+    if (!buttons) {
+        xSemaphoreGive(buttons_lock);
         return;
+    }
 
     button_t *button = NULL;
     if (buttons->gpio_num == gpio_num) {
@@ -144,8 +207,9 @@ void button_delete(const uint8_t gpio_num) {
     }
 
     if (button) {
-        sdk_os_timer_disarm(&button->press_timer);
-        gpio_set_interrupt(button->gpio_num, GPIO_INTTYPE_EDGE_ANY, NULL);
+        toggle_delete(button->gpio_num);
+        button_free(button);
     }
-}
 
+    xSemaphoreGive(buttons_lock);
+}
