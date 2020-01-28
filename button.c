@@ -1,13 +1,9 @@
 #include <stdio.h>
 #include <string.h>
-#include <esplibs/libmain.h>
-
-#include <FreeRTOS.h>
-#include <semphr.h>
-#include <timers.h>
 
 #include "toggle.h"
 #include "button.h"
+#include "port.h"
 
 
 typedef struct _button {
@@ -102,12 +98,10 @@ static void button_free(button_t *button) {
 }
 
 static int buttons_init() {
-    taskENTER_CRITICAL();
     if (!buttons_lock) {
         buttons_lock = xSemaphoreCreateBinary();
         xSemaphoreGive(buttons_lock);
     }
-    taskEXIT_CRITICAL();
 
     return 0;
 }
@@ -159,9 +153,12 @@ int button_create(const uint8_t gpio_num,
         }
     }
 
-    bool pullup = (config.active_level == button_active_low);
-    gpio_enable(button->gpio_num, GPIO_INPUT);
-    gpio_set_pullup(button->gpio_num, pullup, pullup);
+    my_gpio_enable(button->gpio_num);
+    if (config.active_level == button_active_low) {
+        my_gpio_pullup(button->gpio_num);
+    } else {
+        my_gpio_pulldown(button->gpio_num);
+    }
 
     int r = toggle_create(gpio_num, button_toggle_callback, button);
     if (r) {

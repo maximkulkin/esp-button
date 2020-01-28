@@ -3,11 +3,8 @@
 
 #include <stdio.h>
 
-#include <FreeRTOS.h>
-#include <semphr.h>
-#include <timers.h>
-
 #include "toggle.h"
+#include "port.h"
 
 
 #define MAX_TOGGLE_VALUE 4
@@ -53,7 +50,7 @@ static void toggle_timer_callback(TimerHandle_t timer) {
     toggle_t *toggle = toggles;
 
     while (toggle) {
-        if (gpio_read(toggle->gpio_num) == 1) {
+        if (my_gpio_read(toggle->gpio_num) == 1) {
             toggle->value = MIN(toggle->value + 1, MAX_TOGGLE_VALUE);
             if (toggle->value == MAX_TOGGLE_VALUE && !toggle->last_high) {
                 toggle->last_high = true;
@@ -75,7 +72,6 @@ static void toggle_timer_callback(TimerHandle_t timer) {
 
 
 static int toggles_init() {
-    taskENTER_CRITICAL();
     if (!toggles_initialized) {
         toggles_lock = xSemaphoreCreateBinary();
         xSemaphoreGive(toggles_lock);
@@ -86,8 +82,6 @@ static int toggles_init() {
 
         toggles_initialized = true;
     }
-
-    taskEXIT_CRITICAL();
 
     return 0;
 }
@@ -106,10 +100,9 @@ int toggle_create(const uint8_t gpio_num, toggle_callback_fn callback, void* con
     toggle->gpio_num = gpio_num;
     toggle->callback = callback;
     toggle->context = context;
-    toggle->last_high = gpio_read(toggle->gpio_num) == 1;
+    toggle->last_high = my_gpio_read(toggle->gpio_num) == 1;
 
-    gpio_enable(toggle->gpio_num, GPIO_INPUT);
-    // gpio_set_pullup(toggle->gpio_num, pullup, pullup);
+    my_gpio_enable(toggle->gpio_num);
 
     xSemaphoreTake(toggles_lock, portMAX_DELAY);
 
