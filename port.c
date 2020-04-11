@@ -6,7 +6,7 @@
 #include <driver/gpio.h>
 
 void my_gpio_enable(uint8_t gpio) {
-    gpio_set_direction(gpio, GPIO_MODE_OUTPUT);
+    gpio_set_direction(gpio, GPIO_MODE_INPUT);
 }
 
 void my_gpio_pullup(uint8_t gpio) {
