@@ -177,7 +177,7 @@ int button_create(const uint8_t gpio_num,
     return 0;
 }
 
-void button_delete(const uint8_t gpio_num) {
+void button_destroy(const uint8_t gpio_num) {
     if (!buttons_lock) {
         buttons_init();
     }
